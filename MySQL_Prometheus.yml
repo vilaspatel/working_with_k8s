@@ -1,0 +1,124 @@
+##Deploy a MySQL database with Prometheus monitoring##
+apiVersion: apps/v1 
+kind: Deployment
+metadata:
+  name: mysql
+  labels:
+    name: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        name: mysql
+        app: mysql
+    spec:
+      containers:
+      - image: mysql:5.6
+        name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: password
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-pv-claim
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mysql-pv-claim
+  labels:
+    app: mysql
+spec:
+  accessModes:
+   - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+  selector:
+    app: mysql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysqld-exporter
+  labels:
+    app: mysqld-exporter
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-metrics
+      port: 9104
+  selector:
+    app: mysqld-exporter
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysqld-exporter
+  labels:
+    app: mysqld-exporter
+spec:
+  selector:
+    matchLabels:
+      app: mysqld-exporter
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9104"
+      labels:
+        app: mysqld-exporter
+    spec:
+      containers:
+      - name: mysqld-exporter
+        image: prom/mysqld-exporter
+        env:
+        - name: DATA_SOURCE_NAME
+          value: root:password@(mysql:3306)/
+        ports:
+        - containerPort: 9104
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mysqld-exporter
+  namespace: monitoring
+  labels:
+    monitor-app: mysqld-exporter
+spec:
+  jobLabel: k8s-app
+  selector:
+    matchLabels:
+      app: mysqld-exporter
+  namespaceSelector:
+    matchNames:
+    - default
+  endpoints:
+  - port: http-metrics
+    interval: 30s    
